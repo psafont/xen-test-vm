@@ -19,6 +19,7 @@ GUEST="/boot/guest"
 mkdir -p "$GUEST"
 curl --fail -s -L "$VM" > "$GUEST/$KERNEL" || rm -f "$GUEST/$KERNEL"
 UUID=$(xe vm-create name-label="$NAME")
+
+xe vm-param-set uuid=$UUID domain-type=pvh
+xe vm-param-add uuid=$UUID param-name=platform pae=true nx=true
 xe vm-param-set PV-kernel="$GUEST/$KERNEL" uuid="$UUID"
-
-

@@ -4,8 +4,8 @@
 
 # Xen Test VM
 
-This repository contains OCaml code to build a minimal para-virtualised
-kernel to run on the Xen hypervisor for testing Xen Server. The kernel is built
+This repository contains OCaml code to build a HVM kernel with para-virtualised
+drivers to run on the Xen hypervisor for testing XenServer. The kernel is built
 using the Mirage unikernel framework.
 
 # Binary Releases
@@ -25,49 +25,45 @@ binary release.)
 # Installing the VM
 
 The VM is built as `src/test-vm.xen.gz` and available as binary
-release. The file goes into `/boot/guest` on a host:
+release. The file goes into `/var/lib/xcp/guest` on a host:
 
     HOST=host
-    ssh root@$HOST "test -d /boot/guest || mkdir /boot/guest"
-    scp test-vm.xen.gz root@$HOST:/boot/guest
+    ssh root@$HOST "test -d /var/lib/xcp/guest || mkdir /var/lib/xcp/guest"
+    scp test-vm.xen.gz root@$HOST:/var/lib/xcp/guest
 
 The kernel needs to be registered with Xen on the host.  As root on
 `$HOST`, do:
 
     xe vm-create name-label=minion
     # this echoes a UUID for the new VM named "minion"
-    xe vm-param-set PV-kernel=/boot/guest/test-vm.xen.gz uuid=$UUID
-    
+    xe vm-param-set domain-type=pvh uuid=$UUID
+    xe vm-param-set PV-kernel=/var/lib/xcp/guest/test-vm.xen.gz uuid=$UUID
+
 Once installed, use the CLI on the host to operate the VM or use
 XenCenter.
 
 # Building from Source Code
 
-The easiest way is to let opam manage the installation of dependencies:
+Create an opam switch and install mirage:
 
-    opam pin add -n -y mirage-xen \
-    git://github.com/jonludlam/mirage-platform#reenable-suspend-resume2
-    
-    opam pin add -n -y mirage-bootvar-xen \
-    git://github.com/jonludlam/mirage-bootvar-xen#better-parser
-    
-    opam pin add -n -y minios-xen \
-    git://github.com/jonludlam/mini-os#suspend-resume3
+    opam install mirage
 
-    opam pin add xen-test-vm .
-    opam install -v xen-test-vm
+Now use it to create the build infrastructure:
 
+    cd src/
+    mirage configure -t xen
+    make depends
 
-# Travis CI
+Now build the kernel:
 
-The VM is built on Travis using the [Dockerfile](./Dockerfile) - see the
-[.travis.yml](.travis.yml). Travis also creates the releases hosted on
-[GitHub](https://github.com/xapi-project/xen-test-vm/releases).
+    dune build
+
+The deployable kernel can be found in `src/dist`
 
 # Out-of-Band Control Messages
 
 In addition to the shutdown messages sent by Xen, the kernel monitors
-the Xen Store for messages. These are used to control the response to
+the XenStore for messages. These are used to control the response to
 shutdown messages.
 
 ## Shutdown Messages
@@ -75,20 +71,20 @@ shutdown messages.
 The kernel responds to these messages in "control/shutdown". Usually
 the hypervisor only sends these.
 
-    suspend  
-    poweroff 
-    reboot   
-    halt     
-    crash    
+    suspend
+    poweroff
+    reboot
+    halt
+    crash
 
-All other messages are logged and ignored. 
+All other messages are logged and ignored.
 
 ## Testing Messages
 
 The kernel reads messages in "control/testing". It acknowledges a
 message by replacing the read message with the empty string.
 
-A message in "control/testing" is a JSON object: 
+A message in "control/testing" is a JSON object:
 
     { "when":       "now"           // when to react
     , "ack":        "ok"            // how to ack control/shutdown
@@ -110,7 +106,7 @@ describes three aspects:
     * `"something"`: write the string read to "control/shutdown"
 
 3. `"action"`: what do do (either now or on shutdown). The message in
-   `control/shutdown` is ignored and superseded by the `action` field: 
+   `control/shutdown` is ignored and superseded by the `action` field:
     * `"suspend"`: suspend
     * `"poweroff"`: power off
     * `"reboot"`: reboot

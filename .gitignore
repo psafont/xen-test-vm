@@ -2,3 +2,5 @@ src/_build
 src/dist
 src/duniverse
 src/mirage
+src/dune*
+src/Makefile
