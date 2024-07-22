@@ -11,15 +11,12 @@
 
 module Main (Time : Mirage_time.S) = struct
   module CMD = Commands
+  module Main = Xen_os.Main
   module XS = Xen_os.Xs
 
   let ( let* ) = Lwt.bind
   let return = Lwt.return
   let ( let@ ) f x = f x
-
-  (* command strings *)
-  let control_shutdown = "control/shutdown"
-  let control_testing = "control/testing"
 
   let read client path =
     let@ h = XS.immediate client in
@@ -54,99 +51,63 @@ module Main (Time : Mirage_time.S) = struct
    * returns it, or [None] when nothing is there *)
   let read_cmd client path =
     let* msg = read_path client path in
-    match msg with
-    | None -> return None
-    | Some msg ->
-        let* () = ack client path CMD.AckOK in
-        Lwt.catch
-          (fun () -> return (Some (Commands.from_string msg)))
-          (function
-            | CMD.Error msg ->
-                let () = Logs.warn (fun m -> m "bogus command %s" msg) in
-                return None
-            | x -> Lwt.fail x)
+    let cmd = Option.map Commands.from_string msg in
+    let* () =
+      if Option.is_some cmd then ack client path CMD.AckOK else return ()
+    in
+    return cmd
 
-  let suspend () =
-    Logs.info (fun m -> m "%s!" __FUNCTION__);
-    return ()
+  let suspend name k =
+    (* Is there anything to do here? *)
+    Logs.info (fun m -> m "%s!" name);
+    k ()
 
-  let poweroff () =
-    Logs.info (fun m -> m "%s!" __FUNCTION__);
-    return ()
-
-  let reboot () =
-    Logs.info (fun m -> m "%s!" __FUNCTION__);
-    return ()
-
-  let halt () =
-    Logs.info (fun m -> m "%s!" __FUNCTION__);
-    return ()
-
-  let crash () =
-    Logs.info (fun m -> m "%s!" __FUNCTION__);
+  let poweroff name _ =
+    Logs.info (fun m -> m "%s!" name);
+    (* Shut down the kernel by finishing the stream of promises *)
     return ()
 
   (** [dispatch] implements the reaction to control messages *)
-  let dispatch = function
-    | CMD.Suspend -> suspend ()
-    | CMD.PowerOff -> poweroff ()
-    | CMD.Reboot -> reboot ()
-    | CMD.Halt -> halt ()
-    | CMD.Crash -> crash ()
-    | CMD.Ignore -> return ()
+  let dispatch action k =
+    let open CMD.Action in
+    let name () = (to_string action) in
+    match action with
+    | PowerOff -> poweroff (name ()) k
+    | Reboot -> poweroff (name ()) k
+    | Suspend -> suspend (name ()) k
+    | Ignore -> k ()
 
-  let cmd_of_msg = function
-    | "suspend" -> CMD.Suspend
-    | "poweroff" -> CMD.PowerOff
-    | "reboot" -> CMD.Reboot
-    | "halt" -> CMD.Halt
-    | "crash" -> CMD.Crash
-    | _ -> CMD.Ignore
-
-  (* event loop *)
   let start _time =
     let* client = XS.make () in
     let rec loop tick cmd =
-      let* msg = read_path client control_shutdown in
-      let* () =
-        match (cmd, msg) with
-        (* no testing command present, regular kernel behaviour *)
-        | None, None -> return ()
-        | None, Some msg ->
-            let* () = ack client control_shutdown CMD.AckOK in
-            cmd_of_msg msg |> dispatch
-        (* we have a command to execute and to remove it for the
-         * next iteration of the loop *)
-        | Some (CMD.Now action), _ ->
-            let* _ = dispatch action in
-            loop (tick + 1) None
-        | Some (CMD.OnShutdown (a, action)), Some _ ->
-            let* () = ack client control_shutdown a in
-            let _ = dispatch action in
-            loop (tick + 1) None
-        | Some (CMD.OnShutdown (_, _)), None ->
-            return () (* not yet - wait for shutdown message *)
-      in
-      (* read command, ack it, and store it for execution *)
-      let* () =
-        let* cmd = read_cmd client control_testing in
-        match cmd with
-        | Some cmd -> loop (tick + 1) (Some cmd)
-        | None -> return ()
-      in
+      let next cmd () = loop (tick + 1) cmd in
+      let* msg = read_path client CMD.xenstore_action_key in
       (* report the current state *)
       let* () = Time.sleep_ns (Duration.of_sec 1) in
       let* domid = read client "domid" in
       let () = Logs.info (fun m -> m "domain %s tick %d" domid tick) in
-      let* _ =
+      let* () =
         match cmd with
         | Some _ ->
             let () = Logs.info (fun m -> m "command is active") in
             return ()
         | None -> return ()
       in
-      (* loop *)
-      loop (tick + 1) cmd
+      match (cmd, msg) with
+      | None, None -> loop (tick + 1) cmd
+      | None, Some msg ->
+          let* () = ack client CMD.xenstore_action_key CMD.AckOK in
+          let@ () = CMD.Action.of_string msg |> dispatch in
+          next cmd ()
+      | Some (CMD.Now action), _ ->
+          let@ () = dispatch action in
+          next None ()
+      | Some (CMD.OnShutdown (a, action)), Some _ ->
+          let* () = ack client CMD.xenstore_action_key a in
+          let@ () = dispatch action in
+          next None ()
+      | Some (CMD.OnShutdown (_, _)), None ->
+          next None ()
     in
     loop 0 None
 end

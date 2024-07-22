@@ -1,13 +1,19 @@
-exception Error of string
+val xenstore_action_key : string
+
+val features_supported : string list
 
 (** actions a guest can take *)
-type action =
-  | Suspend
+module Action : sig
+  type t =
   | PowerOff
   | Reboot
-  | Halt
-  | Crash
+  | Suspend
   | Ignore
+
+  val of_string : string -> t
+
+  val to_string : t -> string
+end
 
 (** how is a control message from the host acknowledged by the guest *)
 type ack =
@@ -18,9 +24,9 @@ type ack =
 
 (** message to a guest *)
 type t =
-  | Now           of action
-  | OnShutdown    of ack * action
+  | Now           of Action.t
+  | OnShutdown    of ack * Action.t
 
 (** [from_string str] reads a JSON object [str] and returns a [t]
     value that represents it *)
-val from_string: string -> t  (* Error *)
+val from_string: string -> t option
